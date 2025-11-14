@@ -143,8 +143,9 @@ train_and_eval_candidates <- function(y_train, z_train, y_val, z_val, is_binary)
     if (is.null(fit_lasso)) rep(mean(y_train), nrow(as.data.frame(newz))) else as.numeric(predict(fit_lasso, newx = as.matrix(newz), s = "lambda.min", type = ifelse(is_binary, "response", "link")))
   }, metric = metric_lasso)
   
-  # 3) Random Forest
-  fit_rf <- tryCatch(randomForest(x = as.matrix(z_train), y = y_train), error = function(e) NULL)
+   # 3) Random Forest
+  y_rf <- if (is_binary) as.factor(y_train) else y_train
+  fit_rf <- tryCatch(randomForest(x = as.matrix(z_train), y = y_rf), error = function(e) NULL)
   pred_rf <- if (!is.null(fit_rf)) {
     pr <- predict(fit_rf, as.data.frame(z_val), type = if (is_binary) "prob" else "response")
     if (is_binary) pr[,2] else as.numeric(pr)
@@ -156,9 +157,10 @@ train_and_eval_candidates <- function(y_train, z_train, y_val, z_val, is_binary)
       if (is_binary) pr[,2] else as.numeric(pr)
     }
   }, metric = metric_rf)
-  
+
   # 4) SVM
-  fit_svm <- tryCatch(svm(x = as.matrix(z_train), y = y_train, probability = is_binary), error = function(e) NULL)
+  y_svm <- if (is_binary) as.factor(y_train) else y_train
+  fit_svm <- tryCatch(svm(x = as.matrix(z_train), y = y_svm, probability = is_binary), error = function(e) NULL)
   pred_svm <- if (!is.null(fit_svm)) {
     pr <- predict(fit_svm, as.data.frame(z_val), probability = is_binary)
     if (is_binary) attr(pr, "probabilities")[,2] else as.numeric(pr)
@@ -170,6 +172,7 @@ train_and_eval_candidates <- function(y_train, z_train, y_val, z_val, is_binary)
       if (is_binary) attr(pr, "probabilities")[,2] else as.numeric(pr)
     }
   }, metric = metric_svm)
+  
   
   # 5) Torch NN (multi-layer)
   nn_try <- tryCatch({
@@ -427,4 +430,5 @@ set.seed(42)
 res_demo <- run_pml_boosting(n = 500, p = 8, q = 8, nsim = 3, n_iter = 10, min_samples = 20)
 summary_dt <- res_demo[, .(Avg_Metric = mean(Metric, na.rm = TRUE), SD_Metric = sd(Metric, na.rm = TRUE)), by = .(Scenario, Model, Metric_Type)]
 print(summary_dt)
+
 
