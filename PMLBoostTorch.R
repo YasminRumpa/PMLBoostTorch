@@ -190,52 +190,98 @@ train_and_eval_candidates <- function(y_train, z_train, y_val, z_val, is_binary)
   return(out)
 }
 
+
+                      
 tgml_weak_learner_single_split <- function(y, x, z, min_samples = 10, max_candidates = 30, is_binary = FALSE, seed = 1) {
   set.seed(seed)
   n <- length(y)
   if (n < 2 * min_samples) stop("Not enough samples for weak learner")
+  
   best_score <- if (is_binary) -Inf else Inf
   best <- NULL
   
   for (j in seq_len(ncol(x))) {
     vals <- unique(x[, j])
     if (length(vals) <= 1) next
-    cand <- unique(quantile(vals, probs = seq(0.05, 0.95, length.out = max_candidates)))
+    
+    cand <- unique(quantile(vals, probs = seq(0.05, 0.95, length.out = max_candidates), na.rm = TRUE))
     for (v in cand) {
-      left_idx <- which(x[, j] <= v)
+      left_idx  <- which(x[, j] <= v)
       right_idx <- which(x[, j] > v)
       if (length(left_idx) < min_samples || length(right_idx) < min_samples) next
       
-      Ltrain_idx <- sample(left_idx, size = max(2, floor(0.7 * length(left_idx))))
-      Lval_idx <- setdiff(left_idx, Ltrain_idx)
-      if (length(Lval_idx) < 1) Lval_idx <- left_idx
+      
+      Ltrain_idx <- sample(left_idx,  size = max(2, floor(0.7 * length(left_idx))))
+      Lval_idx   <- setdiff(left_idx, Ltrain_idx)
+      if (length(Lval_idx) == 0) Lval_idx <- left_idx
       
       Rtrain_idx <- sample(right_idx, size = max(2, floor(0.7 * length(right_idx))))
-      Rval_idx <- setdiff(right_idx, Rtrain_idx)
-      if (length(Rval_idx) < 1) Rval_idx <- right_idx
+      Rval_idx   <- setdiff(right_idx, Rtrain_idx)
+      if (length(Rval_idx) == 0) Rval_idx <- right_idx
       
-      left_cand <- train_and_eval_candidates(y[Ltrain_idx], z[Ltrain_idx,,drop=FALSE], y[Lval_idx], z[Lval_idx,,drop=FALSE], is_binary)
-      right_cand <- train_and_eval_candidates(y[Rtrain_idx], z[Rtrain_idx,,drop=FALSE], y[Rval_idx], z[Rval_idx,,drop=FALSE], is_binary)
+      
+      left_cand  <- train_and_eval_candidates(y[Ltrain_idx], z[Ltrain_idx, , drop = FALSE],
+                                              y[Lval_idx],   z[Lval_idx,   , drop = FALSE], is_binary)
+      right_cand <- train_and_eval_candidates(y[Rtrain_idx], z[Rtrain_idx, , drop = FALSE],
+                                              y[Rval_idx],   z[Rval_idx,   , drop = FALSE], is_binary)
+      
+      
+      if (length(Ltrain_idx) < 3) left_cand  <- left_cand[names(left_cand)  != "Lasso"]
+      if (length(Rtrain_idx) < 3) right_cand <- right_cand[names(right_cand) != "Lasso"]
+      
       
       if (is_binary) {
-        l_best_name <- names(left_cand)[which.max(sapply(left_cand, function(x) x$metric))]
-        r_best_name <- names(right_cand)[which.max(sapply(right_cand, function(x) x$metric))]
-        l_best <- left_cand[[l_best_name]]; r_best <- right_cand[[r_best_name]]
+        
+        l_scores <- sapply(left_cand,  function(x) x$metric)
+        r_scores <- sapply(right_cand, function(x) x$metric)
+        
+        if (length(l_scores) == 0 || all(is.na(l_scores))) {
+          l_best <- list(predfun = function(newz) rep(0.5, nrow(as.data.frame(newz))), metric = 0.5)
+        } else {
+          l_best_name <- names(left_cand)[which.max(l_scores)]
+          l_best <- left_cand[[l_best_name]]
+        }
+        
+        if (length(r_scores) == 0 || all(is.na(r_scores))) {
+          r_best <- list(predfun = function(newz) rep(0.5, nrow(as.data.frame(newz))), metric = 0.5)
+        } else {
+          r_best_name <- names(right_cand)[which.max(r_scores)]
+          r_best <- right_cand[[r_best_name]]
+        }
+        
         val_idx_all <- c(Lval_idx, Rval_idx)
         preds_all <- numeric(length(val_idx_all))
-        preds_all[1:length(Lval_idx)] <- l_best$predfun(z[Lval_idx,,drop=FALSE])
-        preds_all[(length(Lval_idx)+1):length(val_idx_all)] <- r_best$predfun(z[Rval_idx,,drop=FALSE])
+        preds_all[1:length(Lval_idx)] <- l_best$predfun(z[Lval_idx, , drop = FALSE])
+        preds_all[(length(Lval_idx)+1):length(val_idx_all)] <- r_best$predfun(z[Rval_idx, , drop = FALSE])
+        
         combined_metric <- tryCatch(as.numeric(pROC::auc(pROC::roc(y[val_idx_all], preds_all))), error = function(e) 0.5)
         score_here <- combined_metric
         better <- (score_here > best_score)
+        
       } else {
-        l_best_name <- names(left_cand)[which.min(sapply(left_cand, function(x) x$metric))]
-        r_best_name <- names(right_cand)[which.min(sapply(right_cand, function(x) x$metric))]
-        l_best <- left_cand[[l_best_name]]; r_best <- right_cand[[r_best_name]]
+        # Regression
+        l_scores <- sapply(left_cand,  function(x) x$metric)
+        r_scores <- sapply(right_cand, function(x) x$metric)
+        
+        if (length(l_scores) == 0 || all(is.na(l_scores))) {
+          l_best <- list(predfun = function(newz) rep(mean(y[Ltrain_idx]), nrow(as.data.frame(newz))), metric = Inf)
+        } else {
+          l_best_name <- names(left_cand)[which.min(l_scores)]
+          l_best <- left_cand[[l_best_name]]
+        }
+        
+        if (length(r_scores) == 0 || all(is.na(r_scores))) {
+          r_best <- list(predfun = function(newz) rep(mean(y[Rtrain_idx]), nrow(as.data.frame(newz))), metric = Inf)
+        } else {
+          r_best_name <- names(right_cand)[which.min(r_scores)]
+          r_best <- right_cand[[r_best_name]]
+        }
+        
         val_idx_all <- c(Lval_idx, Rval_idx)
         preds_all <- numeric(length(val_idx_all))
-        preds_all[1:length(Lval_idx)] <- l_best$predfun(z[Lval_idx,,drop=FALSE])
-        preds_all[(length(Lval_idx)+1):length(val_idx_all)] <- r_best$predfun(z[Rval_idx,,drop=FALSE])
+        preds_all[1:length(Lval_idx)] <- l_best$predfun(z[Lval_idx, , drop = FALSE])
+        preds_all[(length(Lval_idx)+1):length(val_idx_all)] <- r_best$predfun(z[Rval_idx, , drop = FALSE])
+        
         combined_metric <- mean((y[val_idx_all] - preds_all)^2)
         score_here <- combined_metric
         better <- (score_here < best_score)
@@ -243,22 +289,29 @@ tgml_weak_learner_single_split <- function(y, x, z, min_samples = 10, max_candid
       
       if (is.null(best) || better) {
         best_score <- score_here
-        best <- list(split_var = colnames(x)[j], split_val = v,
-                     left = l_best, right = r_best,
-                     left_idx = left_idx, right_idx = right_idx,
-                     internal_val_idx = val_idx_all, combined_metric = combined_metric)
+        best <- list(
+          split_var = colnames(x)[j], split_val = v,
+          left = l_best, right = r_best,
+          left_idx = left_idx, right_idx = right_idx,
+          internal_val_idx = val_idx_all, combined_metric = combined_metric
+        )
       }
     }
   }
   
+  
   if (is.null(best)) {
-    base_val <- mean(y)
+    base_val <- if (is_binary) mean(y) else mean(y)
     predfun <- function(newz) rep(base_val, nrow(as.data.frame(newz)))
     return(list(is_stump = TRUE, predfun = predfun))
   }
+  
   class(best) <- "TGMLWeak"
   return(best)
 }
+
+                         
+                                                          
 
 predict_tgml_weak <- function(weak, x_new, z_new) {
   if (is.null(weak) || (!is.null(weak$is_stump) && weak$is_stump)) {
@@ -458,6 +511,7 @@ set.seed(42)
 res_demo <- run_pml_boosting(n = 500, p = 8, q = 8, nsim = 3, n_iter = 10, min_samples = 20)
 summary_dt <- res_demo[, .(Avg_Metric = mean(Metric, na.rm = TRUE), SD_Metric = sd(Metric, na.rm = TRUE)), by = .(Scenario, Model, Metric_Type)]
 print(summary_dt)
+
 
 
 
