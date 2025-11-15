@@ -314,50 +314,78 @@ predict_tgml_boost_reg <- function(boost, x_new, z_new) {
   rowSums(t(t(preds) * boost$alphas)) / sum(boost$alphas)
 }
 
+
+                  
 tgml_boosting_classification <- function(y, x, z, M = 50, min_samples = 10, max_candidates = 30, seed = 1) {
   n <- length(y)
-  w <- rep(1/n, n)
+  w <- rep(1/n, n)                    
   learners <- vector("list", M)
-  alphas <- numeric(M)
-  
+  alphas   <- numeric(M)
+
   for (m in seq_len(M)) {
     set.seed(seed + m)
+
+  
     idx <- sample(seq_len(n), size = n, replace = TRUE, prob = w)
+
     
-    wl <- tgml_weak_learner_single_split(y[idx], x[idx,,drop=FALSE], z[idx,,drop=FALSE],
-                                         min_samples = min_samples, max_candidates = max_candidates,
-                                         is_binary = TRUE, seed = seed + m)
+    wl <- tgml_weak_learner_single_split(
+      y = y[idx],
+      x = x[idx, , drop = FALSE],
+      z = z[idx, , drop = FALSE],
+      min_samples = min_samples,
+      max_candidates = max_candidates,
+      is_binary = TRUE,
+      seed = seed + m
+    )
+
+   
+    if (is.null(wl) || (!is.null(wl$is_stump) && wl$is_stump)) {
+      break
+    }
+
     
     p <- predict_tgml_weak(wl, x, z)
-    p <- pmax(pmin(p, 1 - 1e-8), 1e-8)
+    p <- pmax(pmin(p, 1 - 1e-8), 1e-8)  
+
+    
     err_vec <- ifelse(y == 1, 1 - p, p)
-    err_m <- sum(w * err_vec) / sum(w)
+    err_m   <- sum(w * err_vec) / sum(w)
+
     
-    if (err_m >= 0.5) break
+    if (err_m >= 0.5 || is.na(err_m)) break
+
     
-    beta <- err_m / (1 - err_m)
+    beta  <- err_m / (1 - err_m)
     alpha <- log(1 / beta)
+
     
-    w <- w * exp(alpha * (2 * (y != (p > 0.5)) - 1))
-    w <- w / sum(w)
+    w <- w * exp(alpha * (2 * (y != (p > 0.5)) - 1))  
+    w <- w / sum(w)                                   
     
     learners[[m]] <- wl
-    alphas[m] <- alpha
+    alphas[m]     <- alpha
   }
+
   
   keep <- alphas > 0
   list(learners = learners[keep], alphas = alphas[keep])
 }
 
 predict_tgml_boost_bin <- function(boost, x_new, z_new) {
-  if (length(boost$learners) == 0) return(rep(NA, nrow(x_new)))
+  if (length(boost$learners) == 0) return(rep(0.5, nrow(as.data.frame(x_new))))
+
   logit <- rowSums(sapply(seq_along(boost$learners), function(i) {
     p <- predict_tgml_weak(boost$learners[[i]], x_new, z_new)
     p <- pmax(pmin(p, 1 - 1e-8), 1e-8)
     boost$alphas[i] * log(p / (1 - p))
   }))
-  plogis(logit)
+
+  plogis(logit)  
 }
+
+
+                  
 
 run_pml_boosting <- function(n = 1000, p = 10, q = 10, nsim = 20, n_iter = 30, min_samples = 25) {
   results <- data.table::data.table(Scenario = integer(), Seed = integer(), Model = character(), Metric = numeric(), Metric_Type = character(), CPU = numeric())
@@ -430,5 +458,6 @@ set.seed(42)
 res_demo <- run_pml_boosting(n = 500, p = 8, q = 8, nsim = 3, n_iter = 10, min_samples = 20)
 summary_dt <- res_demo[, .(Avg_Metric = mean(Metric, na.rm = TRUE), SD_Metric = sd(Metric, na.rm = TRUE)), by = .(Scenario, Model, Metric_Type)]
 print(summary_dt)
+
 
 
